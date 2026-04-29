@@ -110,7 +110,7 @@ Pre-normalizing the matrix once at build time means cosine similarity collapses 
 Past 50K vectors, three things start to bite: the matmul slows linearly, the pickle gets ugly to update incrementally, and you start wanting to filter by metadata (date range, album, person). Two upgrade paths:
 
 - **FAISS** if your data lives on one machine and you want sub-millisecond search with approximate-nearest-neighbor indexes (`IndexHNSWFlat` is a sane default).
-- **pgvector** if you already run Postgres and you want metadata filtering, transactional updates, and replication for free. The latency is higher (~10-50ms vs <1ms) but the operational story is dramatically simpler.
+- **pgvector** if you already run Postgres and you want metadata filtering, transactional updates, and replication for free. The latency is higher (~10-50ms vs `<1ms`) but the operational story is dramatically simpler.
 
 Don't reach for these on day one. The prototype-to-production gap is where most of these projects die, and you'll learn more about your actual query patterns from the NumPy version than from a premature pgvector deployment.
 
