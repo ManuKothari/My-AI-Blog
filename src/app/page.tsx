@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function Home() {
   return (
-    <main className="max-w-3xl mx-auto p-8 font-sans text-gray-900">
+    <main className="max-w-5xl mx-auto p-8 font-sans text-gray-900">
       <header className="mb-12 border-b pb-8 mt-12">
         <h1 className="text-4xl font-bold mb-2">Manu Kothari</h1>
         <p className="text-xl text-gray-600">Senior Machine Learning Engineer | AI & RAG Specialist</p>
@@ -25,11 +25,11 @@ export default function Home() {
           <span className="text-sm text-gray-500 font-medium tracking-wide uppercase">Tutorial</span>
           <h3 className="text-xl font-bold mt-2 mb-3">
             <Link href="/blog/multimodal-rag-gemini" className="hover:text-blue-600 transition-colors">
-              Building a Multimodal RAG Pipeline for Semantic Image Search using Gemini 1.5 Pro
+              Building a Multimodal RAG Pipeline for Semantic Image Search using Gemini 3.1 Pro Preview
             </Link>
           </h3>
           <p className="text-gray-700 mb-4">
-            Learn how to build a semantic photo retrieval system by combining Gemini 1.5 Pro&apos;s multimodal vision capabilities with vector embeddings and cosine similarity search.
+            Learn how to build a semantic photo retrieval system by combining Google&apos;s multimodal embedding endpoint, Gemini 3.1 Pro Preview, vector storage, and cosine similarity search.
           </p>
           <Link href="/blog/multimodal-rag-gemini" className="text-blue-600 font-medium">Read Article &rarr;</Link>
         </article>

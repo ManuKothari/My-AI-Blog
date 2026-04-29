@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export default async function BlogIndex() {
   const posts = await getAllPosts();
   return (
-    <main className="max-w-3xl mx-auto px-6 py-12">
+    <main className="max-w-5xl mx-auto px-6 py-12">
       <header className="mb-12 border-b pb-8">
         <Link href="/" className="text-sm text-blue-600">
           &larr; Home
