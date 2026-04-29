@@ -1,0 +1,163 @@
+---
+title: "Building a Multimodal RAG Pipeline for Semantic Image Search using Gemini 1.5 Pro"
+description: "A practical walkthrough of using Gemini 1.5 Pro multimodal embeddings, vector storage, and cosine similarity to build a semantic photo retrieval system."
+date: "2026-04-28"
+tags: ["RAG", "Gemini", "Multimodal", "Vector Search", "Tutorial"]
+slug: "multimodal-rag-gemini"
+---
+
+The photos on your phone are searchable today only because someone — Apple, Google, or you — paid the cost of *labeling* them. That labeling is brittle. It collapses a rich visual scene into a handful of keywords (`beach`, `dog`, `sunset`) and throws everything else away. So a query like *"the photo where my niece is reaching for the cake but hasn't grabbed it yet"* returns nothing useful, even though every detail you described is sitting right there in the pixels.
+
+Multimodal embeddings fix this. Instead of describing an image with text, you let a vision-language model project the image and your query into the *same* high-dimensional vector space, then you ask: which image vectors point closest to the query vector? It's RAG, but the "documents" are pictures.
+
+This post walks through a working pipeline end-to-end, using Gemini 1.5 Pro for the heavy lifting. We'll cover the architecture, generate embeddings, store them, query them, and then talk about what changes when you go from prototype to production.
+
+## Architecture overview
+
+The system is two paths bolted to the same vector store.
+
+```text
+INGEST                                       QUERY
+──────                                       ─────
+images/   ─┐                       text   ─┐
+            ├─► Gemini 1.5 Pro ──► vec ──┐  ├─► Gemini 1.5 Pro ──► vec
+metadata ─┘                              │                          │
+                                         ▼                          ▼
+                                   ┌──────────────────────────────────┐
+                                   │  Vector store (NumPy / FAISS /   │
+                                   │  pgvector)                       │
+                                   └──────────────────────────────────┘
+                                                   │
+                                                   ▼
+                                            top-k by cosine
+```
+
+The crucial property: ingestion and query both pass through the *same* embedding model, so the vectors live in a shared geometry. A photo of a labrador on a beach and the query *"golden dog on sand"* end up near each other not because of shared keywords, but because the model learned that they describe the same kind of scene.
+
+What you control is everything around the model: how images get in, how vectors get stored, how queries get rewritten, and how results get ranked. The model itself is a black box you call over the network.
+
+## Generating embeddings with Gemini 1.5 Pro
+
+Install the SDK and set your API key as `GEMINI_API_KEY`. The Python client batches embedding requests cleanly, which matters because you'll be calling it thousands of times during ingestion.
+
+```python
+import os
+import google.generativeai as genai
+from PIL import Image
+
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+EMBED_MODEL = "models/embedding-001"
+
+def embed_image(path: str) -> list[float]:
+    img = Image.open(path)
+    response = genai.embed_content(
+        model=EMBED_MODEL,
+        content=img,
+        task_type="retrieval_document",
+    )
+    return response["embedding"]
+```
+
+Two details matter here. First, `task_type="retrieval_document"` tells the model that this vector will live in the index — at query time you switch to `retrieval_query`. The model uses different projections for the two roles and mixing them up tanks recall. Second, Gemini accepts a PIL `Image` directly; you don't need to base64-encode it yourself.
+
+For a real ingestion run you want concurrency, rate-limit handling, and resumability. A minimal version with `asyncio` and a semaphore looks like this:
+
+```python
+import asyncio
+from pathlib import Path
+
+CONCURRENCY = 8
+
+async def embed_batch(paths: list[Path]) -> dict[str, list[float]]:
+    sem = asyncio.Semaphore(CONCURRENCY)
+
+    async def one(p: Path):
+        async with sem:
+            for attempt in range(5):
+                try:
+                    return p.name, await asyncio.to_thread(embed_image, str(p))
+                except Exception as e:
+                    wait = 2 ** attempt
+                    print(f"retry {p.name} in {wait}s: {e}")
+                    await asyncio.sleep(wait)
+            return p.name, None
+
+    results = await asyncio.gather(*(one(p) for p in paths))
+    return {name: vec for name, vec in results if vec is not None}
+```
+
+The exponential backoff covers the two failure modes you'll actually hit: 429s when you exceed your per-minute quota, and transient 503s when Google rebalances. Anything beyond five retries usually means the image is corrupt or the API key is wrong, and you want those to surface, not silently retry forever.
+
+## Vector storage
+
+For under ~50K vectors, NumPy plus a pickle is enough. The whole index fits in memory, the search is a single matmul, and you skip a whole class of operational problems.
+
+```python
+import numpy as np
+import pickle
+
+def build_index(embeddings: dict[str, list[float]], out: str) -> None:
+    names = list(embeddings.keys())
+    matrix = np.array([embeddings[n] for n in names], dtype=np.float32)
+    matrix /= np.linalg.norm(matrix, axis=1, keepdims=True)  # pre-normalize
+    with open(out, "wb") as f:
+        pickle.dump({"names": names, "matrix": matrix}, f)
+```
+
+Pre-normalizing the matrix once at build time means cosine similarity collapses to a plain dot product at query time, which is roughly 2x faster and avoids re-normalizing every search.
+
+Past 50K vectors, three things start to bite: the matmul slows linearly, the pickle gets ugly to update incrementally, and you start wanting to filter by metadata (date range, album, person). Two upgrade paths:
+
+- **FAISS** if your data lives on one machine and you want sub-millisecond search with approximate-nearest-neighbor indexes (`IndexHNSWFlat` is a sane default).
+- **pgvector** if you already run Postgres and you want metadata filtering, transactional updates, and replication for free. The latency is higher (~10-50ms vs <1ms) but the operational story is dramatically simpler.
+
+Don't reach for these on day one. The prototype-to-production gap is where most of these projects die, and you'll learn more about your actual query patterns from the NumPy version than from a premature pgvector deployment.
+
+## Cosine similarity search
+
+With a pre-normalized matrix, the query path is one line of NumPy:
+
+```python
+def search(query: str, index: dict, k: int = 10) -> list[tuple[str, float]]:
+    response = genai.embed_content(
+        model=EMBED_MODEL,
+        content=query,
+        task_type="retrieval_query",
+    )
+    q = np.array(response["embedding"], dtype=np.float32)
+    q /= np.linalg.norm(q)
+
+    scores = index["matrix"] @ q  # (N,) cosine similarities
+    top = np.argpartition(-scores, k)[:k]
+    top = top[np.argsort(-scores[top])]
+    return [(index["names"][i], float(scores[i])) for i in top]
+```
+
+`argpartition` followed by a small `argsort` is meaningfully faster than a full `argsort` once your index has more than a few thousand entries — you're sorting `k` items, not `N`. With `k=10` and `N=100,000` it's roughly 30x faster on my laptop.
+
+The score is in `[-1, 1]`. In practice cross-modal cosine scores cluster much tighter than that (often `0.15` to `0.35` for any reasonable hit), so don't bother with absolute thresholds — rank, then trust the top of the list.
+
+## Productionization notes
+
+A few things to keep in mind when you're ready to put this in front of users:
+
+**Cache embeddings aggressively.** Image embeddings cost money and don't change. Keep the `(image_hash → vector)` mapping in a key-value store and only call Gemini for new uploads. A SHA-256 of the file bytes works fine; you don't need a perceptual hash unless you're trying to dedupe re-encodings of the same photo.
+
+**Consider dimension reduction.** Gemini's embedding-001 returns 768-dimensional vectors. For pure search you can usually get away with 256 dimensions after PCA with negligible recall loss, which cuts storage by 3x and search by the same factor. Run the recall comparison on your own data before committing — your domain may be more or less compressible than the benchmarks suggest.
+
+**Measure recall, not vibes.** Build a small evaluation set of (query, expected images) pairs by hand — a hundred is plenty to start. Track Recall@10 and MRR (mean reciprocal rank) over time. Without this you have no way to tell whether a change to the prompt, the chunking, or the model actually improved things or just shifted which queries are broken.
+
+**Watch the cost shape.** Embedding costs scale with ingestion (one-time per image), not with queries (cheap text embeddings on each search). If your images grow at a steady rate, costs are predictable. If you ever re-embed everything because of a model upgrade, that's a budgeting event — plan for it.
+
+## Conclusion
+
+Multimodal RAG is one of those rare cases where the architecture is genuinely simple and the model does the hard part. The whole working system is fewer than 100 lines of Python on top of Gemini's embedding endpoint. The interesting engineering happens at the edges: keeping the index fresh, evaluating quality, and choosing when to graduate from NumPy to a real vector store.
+
+If you want to dig deeper:
+
+- [Gemini API docs — embeddings](https://ai.google.dev/gemini-api/docs/embeddings)
+- [FAISS wiki](https://github.com/facebookresearch/faiss/wiki) for the index-type decision tree
+- [pgvector](https://github.com/pgvector/pgvector) if you want metadata filtering and Postgres ergonomics
+
+The next post in this series will cover hybrid retrieval — combining the dense vector search above with a sparse BM25 layer to recover the queries where keyword matching still wins.

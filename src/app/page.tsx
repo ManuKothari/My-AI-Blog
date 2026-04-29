@@ -1,4 +1,4 @@
-import Image from "next/image";
+import Link from "next/link";
 
 export default function Home() {
   return (
@@ -7,8 +7,8 @@ export default function Home() {
         <h1 className="text-4xl font-bold mb-2">Manu Kothari</h1>
         <p className="text-xl text-gray-600">Senior Machine Learning Engineer | AI & RAG Specialist</p>
         <div className="flex gap-4 mt-4 text-sm text-blue-600">
-          <a href="https://linkedin.com/in/manukothari" target="_blank">LinkedIn</a>
-          <a href="https://github.com/yourusername" target="_blank">GitHub</a>
+          <a href="https://linkedin.com/in/manukothari" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+          <a href="https://github.com/ManuKothari" target="_blank" rel="noopener noreferrer">GitHub</a>
         </div>
       </header>
 
@@ -24,14 +24,14 @@ export default function Home() {
         <article className="border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
           <span className="text-sm text-gray-500 font-medium tracking-wide uppercase">Tutorial</span>
           <h3 className="text-xl font-bold mt-2 mb-3">
-            <a href="#" className="hover:text-blue-600 transition-colors">
+            <Link href="/blog/multimodal-rag-gemini" className="hover:text-blue-600 transition-colors">
               Building a Multimodal RAG Pipeline for Semantic Image Search using Gemini 1.5 Pro
-            </a>
+            </Link>
           </h3>
           <p className="text-gray-700 mb-4">
-            Learn how to build a semantic photo retrieval system by combining Gemini 1.5 Pro's multimodal vision capabilities with vector embeddings and cosine similarity search.
+            Learn how to build a semantic photo retrieval system by combining Gemini 1.5 Pro&apos;s multimodal vision capabilities with vector embeddings and cosine similarity search.
           </p>
-          <a href="#" className="text-blue-600 font-medium">Read Article &rarr;</a>
+          <Link href="/blog/multimodal-rag-gemini" className="text-blue-600 font-medium">Read Article &rarr;</Link>
         </article>
       </section>
     </main>
